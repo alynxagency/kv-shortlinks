@@ -20,50 +20,95 @@ runtime dependencies (~0.8 KiB bundle).
 
 ## Requirements
 
-[Bun](https://bun.sh). Wrangler runs via `bunx` from dev dependencies.
-`bun run dev` (local server) additionally needs Node.js on `PATH`; deploys and
-KV commands work with Bun alone.
+- A Cloudflare account with the target domain added as a zone.
+- [Bun](https://bun.sh). Wrangler runs via `bunx` from dev dependencies.
+  `bun run dev` (local server) additionally needs Node.js on `PATH`; deploys
+  and KV commands work with Bun alone.
 
-## Setup
+## Deploy
+
+Placeholders: `<YOUR_DOMAIN>` (e.g. `go.example.com`), `<YOUR_ZONE>` (the
+Cloudflare zone, e.g. `example.com`), `<ROOT_URL>`, `<KV_ID>`, `<ACCOUNT_ID>`.
+
+### 1. Install and log in
 
 ```sh
+git clone https://github.com/<owner>/kv-shortlinks && cd kv-shortlinks
 bun install
 bunx wrangler login
-bunx wrangler kv namespace create LINKS        # note the printed id
-cp wrangler.example.jsonc wrangler.jsonc       # gitignored; holds your real values
+bunx wrangler whoami        # shows <ACCOUNT_ID>
+```
+
+### 2. Create the KV namespace
+
+```sh
+bunx wrangler kv namespace create LINKS
+```
+
+Note the printed `id` (`<KV_ID>`). If Wrangler offers to add it to your
+config, answer no — you'll set it in the next step with the binding name `LINKS`.
+
+### 3. Configure
+
+```sh
+cp wrangler.example.jsonc wrangler.jsonc     # gitignored
 ```
 
 Edit `wrangler.jsonc`:
 
-- `name` — Worker name.
-- `vars.ROOT_URL` — where `/` redirects (`""` to return 404).
-- `routes` — your hostname(s), e.g. `short.example.com/*`. Only listed
-  hostnames reach the Worker; add `www.` explicitly if wanted.
-- `kv_namespaces[0].id` — the id from above. Keep the binding name `LINKS`.
+```jsonc
+"name": "kv-shortlinks",                       // any Worker name
+"vars": { "ROOT_URL": "<ROOT_URL>" },          // where "/" redirects; "" → 404
+"routes": [
+  { "pattern": "<YOUR_DOMAIN>/*", "zone_name": "<YOUR_ZONE>" }
+  // add "www.<YOUR_DOMAIN>/*" only if www should be served too
+],
+"kv_namespaces": [{ "binding": "LINKS", "id": "<KV_ID>" }]
+```
 
-Then:
+Optional: add `"remote": true` to the KV entry to make `bun run dev` read
+production links instead of local ones.
 
 ```sh
-bun run check      # generate Worker types + typecheck
+bun run check               # generate Worker types + typecheck
+```
+
+### 4. DNS
+
+Routes only fire for hostnames proxied by Cloudflare. If `<YOUR_DOMAIN>` has
+no DNS record yet, add one in Cloudflare → your zone → DNS → Records:
+
+| Type | Name | Content | Proxy status |
+| --- | --- | --- | --- |
+| `AAAA` | `<YOUR_DOMAIN>` (`@` for the apex) | `100::` | Proxied |
+
+`100::` is a discard address — the Worker answers every request, so no
+origin is needed.
+
+### 5. Deploy
+
+Manually:
+
+```sh
 bun run deploy
 ```
 
-### DNS
+Or via GitHub Actions — see [CI/CD](#cicd).
 
-Routes only fire for proxied hostnames. If the hostname has no DNS record,
-add a proxied placeholder in Cloudflare DNS: `AAAA  <name>  100::  Proxied`.
+### 6. Add links and test
 
-### Origin fallback
-
-Unknown paths return `404`. If an origin sits behind the hostname and
-should serve non-link paths, replace the last line of `src/index.ts` with
-`return fetch(request);`.
+```sh
+bunx wrangler kv key put --binding LINKS --remote meet "https://cal.com/you"
+curl -sI https://<YOUR_DOMAIN>/meet          # 302, location: https://cal.com/you
+curl -sI https://<YOUR_DOMAIN>/              # 302, location: <ROOT_URL>
+curl -sI https://<YOUR_DOMAIN>/missing       # 404
+```
 
 ## Managing links
 
 **Dashboard:** Storage & Databases → Workers KV → your namespace → KV Pairs.
-Key `s/xyz`, value `https://…` (no quotes). Changes reach all edges within ~60 s;
-no redeploy needed.
+Key `s/xyz`, value `https://…` (no quotes). Changes reach all edges within
+~60 s; no redeploy needed.
 
 **CLI** (always `--remote`; Wrangler 4 defaults to local storage):
 
@@ -75,14 +120,6 @@ bunx wrangler kv key list   --binding LINKS --remote
 bunx wrangler kv key delete --binding LINKS --remote meet
 ```
 
-## Testing
-
-```sh
-curl -sI https://example.com/meet     # 302, location: <stored URL>
-curl -sI https://example.com/         # 302, location: ROOT_URL
-curl -sI https://example.com/missing  # 404
-```
-
 ## CI/CD
 
 `.github/workflows/deploy.yml`:
@@ -90,13 +127,36 @@ curl -sI https://example.com/missing  # 404
 - Pull requests: typecheck against `wrangler.example.jsonc`. No secrets, no deploy.
 - Push to `main` / manual run: typecheck, then `wrangler deploy`.
 
-Repository secrets (Settings → Secrets and variables → Actions):
+### API token
 
-| Secret | Value |
-| --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token from the "Edit Cloudflare Workers" template, scoped to your account and zone |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account id |
-| `WRANGLER_JSONC` | Full contents of your local `wrangler.jsonc` |
+Cloudflare → My Profile → API Tokens → Create Token → Create Custom Token:
+
+| Scope | Permission | Access | Resource |
+| --- | --- | --- | --- |
+| Account | Workers Scripts | Edit | your account |
+| Zone | Workers Routes | Edit | `<YOUR_ZONE>` only |
+| Zone | Zone | Read | `<YOUR_ZONE>` only |
+
+No KV or DNS permissions are needed: deploy only attaches the namespace by id.
+
+### Repository secrets
+
+```sh
+gh secret set CLOUDFLARE_API_TOKEN                     # paste the token
+gh secret set CLOUDFLARE_ACCOUNT_ID --body <ACCOUNT_ID>
+gh secret set WRANGLER_JSONC < wrangler.jsonc          # full local config
+gh secret list
+```
+
+Re-run the last command whenever you change `wrangler.jsonc` — CI deploys
+from the secret, not your local file. Secret values are masked in Actions logs.
+
+### Run
+
+```sh
+git push                    # or: gh workflow run deploy.yml
+gh run watch                # pick the run when prompted
+```
 
 ## License
 
