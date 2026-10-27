@@ -33,7 +33,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Write wrangler.jsonc from secret
-        run: printf '%s' "$WRANGLER_JSONC" > wrangler.jsonc
+        run: |
+          if [ -z "$WRANGLER_JSONC" ]; then
+            echo "::error::Repository secret WRANGLER_JSONC is not set (see README → CI/CD)."
+            exit 1
+          fi
+          printf '%s' "$WRANGLER_JSONC" > wrangler.jsonc
         env:
           WRANGLER_JSONC: ${{ secrets.WRANGLER_JSONC }}
       - run: bunx wrangler deploy
