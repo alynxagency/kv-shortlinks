@@ -1,0 +1,14 @@
+{
+  "name": "kv-shortlinks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx wrangler dev",
+    "deploy": "bunx wrangler deploy",
+    "check": "bunx wrangler types && bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "wrangler": "^4.153.0"
+  }
+}

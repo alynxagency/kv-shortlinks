@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env*
+worker-configuration.d.ts
+wrangler.jsonc
+wrangler.json
+wrangler.toml
+package-lock.json
+PLAN.md
